@@ -1,0 +1,290 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(readr)
+library(tidyr)
+fn="BirdStrikesData-V2.csv"
+df_raw<-read.csv(file=fn,header=T,stringsAsFactors = F,na.strings=c("","NA","N/A"))
+```
+
+```{r}
+head(df_raw,5)
+```
+
+```{r}
+date_sep <- substring(df_raw$flight_date,1,10)
+date_format <- gsub("-","/",date_sep)
+df_raw$flight_date <- as.Date(date_format, '%m/%d/%Y')
+head(df_raw,5)
+```
+
+```{r}
+df_raw <- df_raw %>% replace_na(list(aircraft="Unknown",airport="Unknown",flight_date="Unknown",airline="Unknown",pilot_warned_flag="Unknown",aircraft="Unknown",airport="Unknown",flight_date="Unknown",airline="Unknown",pilot_warned_flag="Unknown",altitude_ft="Unknown",origin="Unknown"))
+```
+
+```{r}
+colSums(is.na(df_raw))
+```
+
+
+```{r}
+df_raw$pilot_warned_flag[df_raw$pilot_warned_flag== "Y"] <- TRUE
+df_raw$pilot_warned_flag[df_raw$pilot_warned_flag== "N"] <- FALSE
+```
+
+```{r}
+library(dplyr)
+df_raw = filter(df_raw, airline != "MILITARY")
+```
+
+```{r}
+drop <- c("impact","wildlife_struck","damage","remains_collected_flag", "Remarks","wildlife_size","species", "heavy_flag")
+  
+df_new = df_raw[,!(names(df_raw) %in% drop)]
+```
+
+
+```{r}
+unique(df_new$flight_phase)
+```
+
+```{r}
+df_new$flight_phase<-sub("Climb|Take-off run","Take Off",df_new$flight_phase)
+df_new$flight_phase<-sub("Landing Roll|Descent","Landing",df_new$flight_phase)
+df_new$flight_phase<-sub("Approach","In Flight",df_new$flight_phase)
+df_new$flight_phase<-sub("Taxi|Parked","Unknown",df_new$flight_phase)
+df_new$flight_phase[df_new$flight_phase==''] <- 'Unknown'
+```
+
+```{r}
+df_new$airline<-gsub('[*]', '', df_new$airline)
+head(df_new,5)
+```
+
+```{r}
+#1. library
+#install.packages('RMySQL')
+library(RMySQL)
+library(DBI)
+#2. Setting 
+db_user <- 'admin'
+db_password <- 'Amazon3443'
+db_name <- 'SandboxDB'
+db_host <- 'cs5200sid.c8u2oysrjplq.us-east-2.rds.amazonaws.com' #aws host
+db_port <- 3306
+
+#3 Read data from db
+mydb <- dbConnect(MySQL(), user = db_user, password = db_password, dbname = db_name, host = db_host, port = db_port)
+```
+
+#Creating all the basic tables.
+```{sql connection=mydb}
+CREATE TABLE IF NOT EXISTS STATE(
+STATEID INT AUTO_INCREMENT PRIMARY KEY,
+STATENAME VARCHAR(80) UNIQUE NOT NULL,
+STATECODE VARCHAR(10)
+)
+```
+
+#AIRCRAFT look up table.
+```{sql connection=mydb}
+create table if not exists AIRCRAFT(
+ACID INT AUTO_INCREMENT PRIMARY KEY,
+MODEL VARCHAR(15) NOT NULL UNIQUE
+)
+```
+
+#FLIGHTPHASE lookup table.
+```{sql connection=mydb}
+CREATE TABLE IF NOT EXISTS FLIGHTPHASE(
+FID INT PRIMARY KEY AUTO_INCREMENT,
+FLIGHTPHASE VARCHAR(20) NOT NULL UNIQUE
+);
+```
+
+#CONDITIONS TABLE
+```{sql connection=mydb}
+CREATE TABLE IF NOT EXISTS CONDITIONS(
+CID INT AUTO_INCREMENT PRIMARY KEY,
+SKY_CONDITION VARCHAR(100) NOT NULL UNIQUE,
+EXPLANATION TEXT
+);
+```
+
+#AIRPORTS TABLE
+```{sql connection=mydb}
+CREATE TABLE IF NOT EXISTS AIRPORTS(
+STATE VARCHAR(80),
+AIRPORTNAME VARCHAR(180) NOT NULL UNIQUE,
+AIRPORTCODE VARCHAR(10),
+AID INT PRIMARY KEY AUTO_INCREMENT,
+ FOREIGN KEY(STATE) REFERENCES STATE(STATENAME)
+);
+
+```
+
+#AIRLINE TABLE 
+```{sql connection=mydb}
+CREATE TABLE IF NOT EXISTS AIRLINE(
+AIRLINEID INT AUTO_INCREMENT PRIMARY KEY,
+AIRLINENAME VARCHAR(190) NOT NULL UNIQUE
+)
+```
+
+#INCIDENTS TABLE
+```{sql connection=mydb}
+CREATE TABLE IF NOT EXISTS INCIDENTS(
+RID INT PRIMARY KEY,
+DATE DATE NOT NULL,
+ORIGIN VARCHAR(80),
+FOREIGN KEY(ORIGIN) REFERENCES AIRPORTS(STATE),
+AIRLINE VARCHAR(190),
+FOREIGN KEY(AIRLINE) REFERENCES AIRLINE(AIRLINENAME),
+AIRCRAFT VARCHAR(15),
+FOREIGN KEY(AIRCRAFT) REFERENCES AIRCRAFT(MODEL),
+FLIGHTPHASE VARCHAR(20),
+FOREIGN KEY(FLIGHTPHASE) REFERENCES FLIGHTPHASE(FLIGHTPHASE),
+ALTITUDE DOUBLE,
+CONDITIONS VARCHAR(100),
+FOREIGN KEY(CONDITIONS) REFERENCES CONDITIONS(SKY_CONDITION),
+WARNING BOOL
+)
+```
+
+#Connecting to mysql rds on aws.
+```{r}
+#1. library
+#install.packages('RMySQL')
+library(RMySQL)
+
+#2. Setting 
+db_user <- 'admin'
+db_password <- 'Amazon3443'
+db_name <- 'SandboxDB'
+db_host <- 'cs5200sid.c8u2oysrjplq.us-east-2.rds.amazonaws.com' #aws host
+db_port <- 3306
+
+#3 Read data from db
+mydb <- dbConnect(MySQL(), user = db_user, password = db_password, dbname = db_name, host = db_host, port = db_port)
+```
+
+```{r}
+stateVals <- distinct(df_new_without_empty_records,origin)
+```
+
+#Adding state values to state table.
+#Let's first inspect the state table.
+
+```{sql connection=mydb}
+desc STATE;
+```
+
+#So, state code can be null, and we have kept stateid as autoincrement. Let's add all the names 
+```{r}
+stateVals <- stateVals[order(stateVals$origin),]
+n.states <- ncol(stateVals)
+for (r in stateVals){
+  rs <- dbSendStatement(conn = mydb, 
+                        statement = paste0("insert into STATE(STATENAME) values (\'",r,"\')"))
+  dbClearResult(rs)
+}
+
+```
+
+```{sql connection=mydb}
+SELECT * FROM STATE;
+```
+
+```{r}
+aircraftVals <- distinct(df_new_without_empty_records,model)
+```
+
+#Adding AIRCRAFT values to AIRCRAFT table.
+#Let's first inspect the AIRCRAFT table.
+
+```{sql connection=mydb}
+desc AIRCRAFT ;
+```
+
+#So, aircraft model cannot be null, and we have kept acid as autoincrement. 
+```{r}
+aircraftVals <- aircraftVals[order(aircraftVals$model),]
+n.aircrafts <- ncol(aircraftVals)
+for (r in aircraftVals){
+  rs <- dbSendStatement(conn = mydb, 
+                        statement = paste0("insert into AIRCRAFT(MODEL) values (\'",r,"\')"))
+  dbClearResult(rs)
+}
+```
+
+```{sql connection=mydb}
+SELECT * FROM AIRCRAFT;
+```
+
+```{r}
+flight <- distinct(df_new_without_empty_records,flight_phase)
+```
+
+#Adding FLIGHTPHASE values to FLIGHTPHASE table.
+#Let's first inspect the FLIGHTPHASE table.
+
+```{sql connection=mydb}
+desc FLIGHTPHASE ;
+```
+
+#So, flightphase cannot be null, and we have kept fid as autoincrement.
+```{r}
+flight <- flight[order(flight$flight_phase),]
+n.flight <- ncol(flight)
+for (r in flight){
+  rs <- dbSendStatement(conn = mydb,
+                        statement = paste0("insert into FLIGHTPHASE(FLIGHTPHASE) values (\'",r,"\')"))
+  dbClearResult(rs)
+}
+```
+
+```{sql connection=mydb}
+SELECT * FROM FLIGHTPHASE;
+```
+#conditions values
+```{r}
+conditions <- distinct(df_new_without_empty_records,sky_conditions)
+```
+
+#Adding flightphase values to flightphase table.
+#Let's first inspect the flightphase table.
+
+```{sql connection=mydb}
+desc CONDITIONS;
+```
+
+#So, CONDITIONS cannot be null, and we have kept Cid as autoincrement.
+```{r}
+conditions <- conditions[order(conditions$sky_conditions),]
+n.conditions <- ncol(conditions)
+for (r in conditions){
+  rs <- dbSendStatement(conn = mydb,
+                        statement = paste0("insert into CONDITIONS(SKY_CONDITION) values (\'",r,"\')"))
+  dbClearResult(rs)
+}
+```
+
+```{sql connection=mydb}
+SELECT * FROM CONDITIONS;
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
