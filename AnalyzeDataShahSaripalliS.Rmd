@@ -1,0 +1,25 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+```{r}
+library(RMySQL)
+mydb = dbConnect(RMySQL::MySQL(),
+                 dbname='practicum2',
+                 host='localhost',
+                 port=3306,
+                 user='admin',
+                 password='admin')
+```
+
+```{sql connection=mydb}
+SELECT distinct authorIds as Author_ID ,concat(Initials,'.',LastName) as Author_Name , numArticles as number_of_articles  from author_fact order by numArticles Desc limit 10 ;
+```
+```{sql connection=mydb}
+select ISSN,JournalTitle,no_of_articles as per_year,year from journal_fact group by year order by per_year desc limit 1;
+```
+```{r}
+dbDisconnect(mydb)
+```
+
